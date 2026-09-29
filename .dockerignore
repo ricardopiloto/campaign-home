@@ -1,0 +1,9 @@
+node_modules
+dist
+data
+.env
+*.tsbuildinfo
+openspec
+.claude
+server/**/*.test.ts
+server/test-helpers.ts
