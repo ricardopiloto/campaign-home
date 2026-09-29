@@ -39,7 +39,6 @@ export const campaignInputSchema = z
     title: trimmedText(120, 'O nome').min(1, 'O nome é obrigatório'),
     tagline: trimmedText(300, 'A tagline').default(''),
     system: trimmedText(60, 'O sistema').default(''),
-    status: trimmedText(60, 'O status').default(''),
     ongoing: z.boolean().default(false),
     imageUrl: z
       .string()

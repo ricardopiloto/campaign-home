@@ -21,6 +21,7 @@ const MIGRATIONS: string[] = [
     CHECK (foundry_url IS NOT NULL OR codex_url IS NOT NULL),
     CHECK ((source = 'codex') = (codex_slug IS NOT NULL))
   )`,
+  `ALTER TABLE campaigns ADD COLUMN foundry_status_url TEXT`,
 ]
 
 export function migrate(db: DatabaseSync): void {

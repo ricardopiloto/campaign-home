@@ -16,7 +16,6 @@ interface FormValues {
   title: string
   tagline: string
   system: string
-  status: string
   ongoing: boolean
   imageUrl: string
   imageSource: ImageSource | null
@@ -39,7 +38,6 @@ const EMPTY: FormValues = {
   title: '',
   tagline: '',
   system: '',
-  status: '',
   ongoing: false,
   imageUrl: '',
   imageSource: null,
@@ -54,7 +52,6 @@ function fromCampaign(c: AdminCampaign): FormValues {
     title: c.title,
     tagline: c.tagline,
     system: c.system,
-    status: c.status,
     ongoing: c.ongoing,
     imageUrl: c.imageUrl ?? '',
     imageSource: c.imageSource,
@@ -391,9 +388,6 @@ function CampaignForm() {
                 {(a) => (
                   <input {...a} className="field__input" maxLength={60} placeholder="PF2E" {...text('system')} />
                 )}
-              </Field>
-              <Field label="Status" error={errors.status} hint="Ex.: 4 PLAYERS, OFFLINE">
-                {(a) => <input {...a} className="field__input" maxLength={60} {...text('status')} />}
               </Field>
               <div className="field field--inline">
                 <label className="choice">

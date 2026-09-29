@@ -27,6 +27,9 @@ import type { CodexClient } from './codex.ts'
 import type { Config } from './config.ts'
 import { DuplicateCodexSlugError } from './repo.ts'
 import type { CampaignRepo, StoredCampaign } from './repo.ts'
+import { createFoundryStatusClient, UnsafeFoundryUrlError } from './foundry.ts'
+import type { FoundryStatus } from './foundry.ts'
+import type { createFoundryStatusClient as FoundryStatusClientFactory } from './foundry.ts'
 import { UploadError } from './uploads.ts'
 import type { UploadStore } from './uploads.ts'
 
@@ -37,21 +40,32 @@ export interface AppDeps {
   repo: CampaignRepo
   codex: CodexClient
   uploads: UploadStore
+  foundryStatus?: ReturnType<typeof FoundryStatusClientFactory>
   limiter?: LoginLimiter
 }
 
-function toPublic(c: StoredCampaign): PublicCampaign {
+function toPublic(c: StoredCampaign, foundryStatus: FoundryStatus | null): PublicCampaign {
   return {
     id: c.id,
     title: c.title,
     tagline: c.tagline,
-    system: c.system,
-    status: c.status,
+    system: foundryStatus
+      ? foundryStatus.tableActive
+        ? foundryStatus.system || c.system
+        : ''
+      : c.system,
+    status: statusLabel(foundryStatus),
     ongoing: c.ongoing,
     imageUrl: c.imageUrl,
     foundryUrl: c.foundryUrl,
     codexUrl: c.codexUrl,
   }
+}
+
+function statusLabel(status: FoundryStatus | null): string {
+  if (!status) return 'NÃO CONFIGURADO'
+  if (status.serverAvailable !== true) return 'INDISPONÍVEL'
+  return status.tableActive ? 'ATIVO' : 'INATIVO'
 }
 
 function toInput(c: StoredCampaign): CampaignInput {
@@ -61,7 +75,6 @@ function toInput(c: StoredCampaign): CampaignInput {
     title: c.title,
     tagline: c.tagline,
     system: c.system,
-    status: c.status,
     ongoing: c.ongoing,
     imageUrl: c.imageUrl,
     imageSource: c.imageSource,
@@ -75,6 +88,7 @@ const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 429 | 502 | 503,
 
 export function createApp(deps: AppDeps) {
   const { config, repo, codex, uploads } = deps
+  const foundryStatus = deps.foundryStatus ?? createFoundryStatusClient()
   const limiter = deps.limiter ?? createLoginLimiter()
   const app = new Hono()
 
@@ -113,9 +127,12 @@ export function createApp(deps: AppDeps) {
 
   app.get('/api/health', (c) => c.json({ ok: true }))
 
-  app.get('/api/campaigns', (c) => {
+  app.get('/api/campaigns', async (c) => {
     c.header('Cache-Control', 'no-store')
-    return c.json(repo.list().map(toPublic))
+    const campaigns = await Promise.all(
+      repo.list().map(async (campaign) => toPublic(campaign, await foundryStatus.get(campaign.foundryUrl))),
+    )
+    return c.json(campaigns)
   })
 
   // ---------- Admin: sessão ----------
@@ -209,19 +226,33 @@ export function createApp(deps: AppDeps) {
         if (!(err instanceof CodexUnavailableError)) throw err
       }
     }
-    const result: AdminCampaign[] = campaigns.map((x) => ({
-      ...x,
-      missingInCodex:
-        x.source === 'manual' ? false : codexSlugs ? !codexSlugs.has(x.codexSlug!) : null,
-    }))
+    const result: AdminCampaign[] = await Promise.all(
+      campaigns.map(async (x) => ({
+        ...x,
+        status: statusLabel(await foundryStatus.get(x.foundryUrl)),
+        missingInCodex:
+          x.source === 'manual' ? false : codexSlugs ? !codexSlugs.has(x.codexSlug!) : null,
+      })),
+    )
     return c.json(result)
   })
 
   admin.post('/campaigns', async (c) => {
     const parsed = campaignInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return fail(c, 400, toApiError(parsed.error))
+    if (parsed.data.foundryUrl) {
+      try {
+        await foundryStatus.assertSafeUrl(parsed.data.foundryUrl)
+      } catch (err) {
+        if (err instanceof UnsafeFoundryUrlError) {
+          return fail(c, 400, { error: err.message, field: 'foundryUrl' })
+        }
+        throw err
+      }
+    }
     try {
-      return c.json(repo.create(parsed.data), 201)
+      const created = repo.create(parsed.data)
+      return c.json({ ...created, status: statusLabel(await foundryStatus.get(created.foundryUrl)) }, 201)
     } catch (err) {
       if (err instanceof DuplicateCodexSlugError) {
         return fail(c, 409, { error: err.message, field: 'codexSlug' })
@@ -242,11 +273,21 @@ export function createApp(deps: AppDeps) {
     if (!previous) return fail(c, 404, { error: 'Campanha não encontrada' })
     const parsed = campaignInputSchema.safeParse(await readJson(c))
     if (!parsed.success) return fail(c, 400, toApiError(parsed.error))
+    if (parsed.data.foundryUrl) {
+      try {
+        await foundryStatus.assertSafeUrl(parsed.data.foundryUrl)
+      } catch (err) {
+        if (err instanceof UnsafeFoundryUrlError) {
+          return fail(c, 400, { error: err.message, field: 'foundryUrl' })
+        }
+        throw err
+      }
+    }
     try {
       const updated = repo.update(previous.id, parsed.data)
       if (!updated) return fail(c, 404, { error: 'Campanha não encontrada' })
       if (previous.imageUrl !== updated.imageUrl) await uploads.remove(previous.imageUrl)
-      return c.json(updated)
+      return c.json({ ...updated, status: statusLabel(await foundryStatus.get(updated.foundryUrl)) })
     } catch (err) {
       if (err instanceof DuplicateCodexSlugError) {
         return fail(c, 409, { error: err.message, field: 'codexSlug' })
@@ -291,7 +332,8 @@ export function createApp(deps: AppDeps) {
       input.imageUrl = item.imageUrl
       input.imageSource = item.imageUrl ? 'codex' : null
     }
-    return c.json(repo.update(current.id, input))
+    const updated = repo.update(current.id, input)
+    return c.json(updated ? { ...updated, status: statusLabel(await foundryStatus.get(updated.foundryUrl)) } : null)
   })
 
   admin.post('/uploads', async (c) => {

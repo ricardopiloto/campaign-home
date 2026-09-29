@@ -60,7 +60,7 @@ function params(input: CampaignInput) {
     title: input.title,
     tagline: input.tagline,
     system: input.system,
-    status: input.status,
+    status: '',
     ongoing: input.ongoing ? 1 : 0,
     image_url: input.imageUrl,
     image_source: input.imageSource,

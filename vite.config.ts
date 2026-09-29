@@ -8,7 +8,15 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/api': apiTarget,
+      '/api': {
+        target: apiTarget,
+        changeOrigin: false,
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq, req) => {
+            if (req.headers.host) proxyReq.setHeader('host', req.headers.host)
+          })
+        },
+      },
       '/uploads': apiTarget,
     },
   },
