@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { campaignInputSchema, toApiError } from '../shared/schemas.ts'
-import { createLoginLimiter, createSessionToken, verifySessionToken } from './auth.ts'
+import { createLoginLimiter } from './auth.ts'
 import { CodexUnavailableError, createCodexClient, mapCatalog } from './codex.ts'
 import { loadConfig } from './config.ts'
 import { migrate, openDb } from './db.ts'
@@ -29,9 +29,9 @@ describe('db', () => {
   it('cria o schema e não reaplica migrações', () => {
     const db = openDb(':memory:')
     const version = () => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-    assert.equal(version(), 1)
+    assert.equal(version(), 3)
     migrate(db)
-    assert.equal(version(), 1)
+    assert.equal(version(), 3)
   })
 })
 
@@ -98,22 +98,6 @@ describe('validação', () => {
     assert.equal(parse({ ...base, imageUrl: 'https://i.test/a.png', imageSource: 'codex' }).data?.imageSource, 'url')
     assert.equal(parse({ ...base, imageUrl: '/uploads/0e0f5b8a-3c1e-4c4e-9d1b-3a4f5e6d7c8b.png' }).data?.imageSource, 'upload')
     assert.equal(parse({ ...base, imageUrl: '/etc/passwd' }).success, false)
-  })
-})
-
-describe('sessão', () => {
-  const secret = 'k'.repeat(32)
-  it('aceita token válido', () => {
-    assert.equal(verifySessionToken(createSessionToken(secret), secret), true)
-  })
-  it('recusa token adulterado, de outro segredo ou expirado', () => {
-    const token = createSessionToken(secret)
-    const [exp, mac] = token.split('.')
-    assert.equal(verifySessionToken(`${Number(exp) + 999}.${mac}`, secret), false)
-    assert.equal(verifySessionToken(token, 'o'.repeat(32)), false)
-    const old = createSessionToken(secret, Date.now() - 8 * 24 * 3600 * 1000)
-    assert.equal(verifySessionToken(old, secret), false)
-    assert.equal(verifySessionToken('lixo', secret), false)
   })
 })
 

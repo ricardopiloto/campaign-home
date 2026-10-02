@@ -5,6 +5,7 @@ export interface Config {
   dataDir: string
   adminPassword: string
   sessionSecret: string
+  adminSessionIdleTimeoutSeconds: number
   /** URL base do campaign-codex, sem barra final. null desativa o modo vinculado. */
   codexBaseUrl: string | null
   /** true/false força o atributo Secure do cookie; null decide pelo protocolo da requisição. */
@@ -27,6 +28,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (sessionSecret.length < 32) {
     throw new Error('SESSION_SECRET ausente ou curta: use ao menos 32 caracteres aleatórios.')
   }
+  const idleRaw = env.ADMIN_SESSION_IDLE_TIMEOUT_SECONDS ?? '1800'
+  const adminSessionIdleTimeoutSeconds = Number(idleRaw)
+  if (!/^\d+$/.test(idleRaw) || !Number.isSafeInteger(adminSessionIdleTimeoutSeconds)
+    || adminSessionIdleTimeoutSeconds <= 0 || !Number.isSafeInteger(adminSessionIdleTimeoutSeconds * 1000)) {
+    throw new Error('ADMIN_SESSION_IDLE_TIMEOUT_SECONDS deve ser um inteiro positivo em segundos.')
+  }
 
   const codexRaw = env.CODEX_BASE_URL?.trim() ?? ''
   let codexBaseUrl: string | null = null
@@ -48,6 +55,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir: path.resolve(env.DATA_DIR ?? './data'),
     adminPassword,
     sessionSecret,
+    adminSessionIdleTimeoutSeconds,
     codexBaseUrl,
     cookieSecure: parseBool(env.COOKIE_SECURE),
     trustedProxy: parseBool(env.TRUSTED_PROXY) ?? false,

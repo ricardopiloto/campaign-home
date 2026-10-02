@@ -22,6 +22,14 @@ const MIGRATIONS: string[] = [
     CHECK ((source = 'codex') = (codex_slug IS NOT NULL))
   )`,
   `ALTER TABLE campaigns ADD COLUMN foundry_status_url TEXT`,
+  `CREATE TABLE admin_sessions (
+    token_hash TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    last_activity INTEGER NOT NULL,
+    absolute_expiry INTEGER NOT NULL
+  );
+  CREATE INDEX admin_sessions_expiry ON admin_sessions(absolute_expiry);
+  CREATE INDEX admin_sessions_activity ON admin_sessions(last_activity)`,
 ]
 
 export function migrate(db: DatabaseSync): void {

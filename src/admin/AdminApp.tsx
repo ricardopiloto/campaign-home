@@ -1,31 +1,41 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link, Navigate, Outlet, Route, Routes, useNavigate } from 'react-router-dom'
 import { api } from '../api'
 import AdminLogin from './AdminLogin'
 import AdminList from './AdminList'
 import CampaignForm from './CampaignForm'
+import { useAdminSession } from './useAdminSession'
 
 /** Verifica a sessão antes de renderizar as telas protegidas. */
 function AdminLayout() {
   const navigate = useNavigate()
-  const [session, setSession] = useState<'checking' | 'ok' | 'none'>('checking')
-
-  useEffect(() => {
-    api('GET', '/api/admin/session')
-      .then(() => setSession('ok'))
-      .catch(() => setSession('none'))
-  }, [])
+  const { state, ready, retry } = useAdminSession()
+  const [logoutError, setLogoutError] = useState<string | null>(null)
 
   async function logout() {
-    await api('POST', '/api/admin/logout').catch(() => {})
-    navigate('/admin/login', { replace: true })
+    try {
+      await api('POST', '/api/admin/logout')
+      navigate('/admin/login', { replace: true })
+    } catch {
+      setLogoutError('Não foi possível sair. Verifique a conexão e tente novamente.')
+    }
   }
 
-  if (session === 'checking') return null
-  if (session === 'none') return <Navigate to="/admin/login" replace />
+  if (state === 'expired') return <Navigate to="/admin/login" replace state={{ sessionExpired: true }} />
 
   return (
     <div className="page admin">
+      {state === 'checking' && <p role="status">Verificando sessão…</p>}
+      {state === 'unavailable' && (
+        <div role="alert">
+          <p>Não foi possível verificar a sessão. Verifique a conexão.</p>
+          <button className="button" type="button" onClick={retry}>Tentar novamente</button>
+        </div>
+      )}
+      {logoutError && <p role="alert">{logoutError}</p>}
+      {ready && <fieldset disabled={state !== 'ok'} ref={(element) => {
+        if (element) element.inert = state !== 'ok'
+      }} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <header className="admin-header">
         <div>
           <p className="label-mono">FOUNDRY GATEWAY</p>
@@ -46,6 +56,7 @@ function AdminLayout() {
       <main className="admin-main">
         <Outlet />
       </main>
+      </fieldset>}
     </div>
   )
 }

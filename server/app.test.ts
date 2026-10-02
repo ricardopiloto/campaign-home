@@ -225,7 +225,7 @@ describe('ressincronização', () => {
     assert.equal(updated.system, 'WFRP 4e')
     assert.equal(updated.imageUrl, `${CODEX}/api/c/wfrp/media/covers/b.png`)
     assert.equal(updated.tagline, 'Minha tagline')
-    assert.equal(updated.status, '4 PLAYERS')
+    assert.equal(updated.status, 'ATIVO')
     assert.equal(updated.foundryUrl, 'https://foundry.test/wfrp')
   })
 

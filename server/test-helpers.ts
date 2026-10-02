@@ -6,6 +6,7 @@ import { createLoginLimiter } from './auth.ts'
 import { createCodexClient } from './codex.ts'
 import { openDb } from './db.ts'
 import { createRepo } from './repo.ts'
+import { createSessionStore } from './sessions.ts'
 import { createUploadStore } from './uploads.ts'
 
 export const PASSWORD = 'senha-de-teste'
@@ -21,7 +22,7 @@ export const CATALOG = {
 
 export type FakeCodex = { body: unknown; status: number; fail: boolean; calls: number }
 
-export function setup({ codexBaseUrl = CODEX as string | null } = {}) {
+export function setup({ codexBaseUrl = CODEX as string | null, idleTimeoutSeconds = 1800, now = Date.now } = {}) {
   const fake: FakeCodex = { body: CATALOG, status: 200, fail: false, calls: 0 }
   const fetchImpl = (async () => {
     fake.calls++
@@ -30,10 +31,17 @@ export function setup({ codexBaseUrl = CODEX as string | null } = {}) {
   }) as typeof fetch
 
   const uploadsDir = mkdtempSync(path.join(tmpdir(), 'gw-uploads-'))
-  const repo = createRepo(openDb(':memory:'))
+  const db = openDb(':memory:')
+  const repo = createRepo(db)
   const app = createApp({
     config: { adminPassword: PASSWORD, sessionSecret: SECRET, cookieSecure: false, trustedProxy: false },
     repo,
+    sessions: createSessionStore(db, { idleTimeoutSeconds, now }),
+    // Fixtures usam domínios .test; testes de API não devem depender de DNS/rede reais.
+    foundryStatus: {
+      assertSafeUrl: async () => {},
+      get: async (url) => url ? { serverAvailable: true, tableActive: true, world: 'test', system: '' } : null,
+    },
     codex: createCodexClient({ baseUrl: codexBaseUrl, fetch: fetchImpl, cacheTtlMs: 0 }),
     uploads: createUploadStore(uploadsDir),
     limiter: createLoginLimiter(),

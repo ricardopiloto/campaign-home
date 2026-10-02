@@ -6,6 +6,7 @@ import { createCodexClient } from './codex.ts'
 import { loadConfig } from './config.ts'
 import { openDb } from './db.ts'
 import { createRepo } from './repo.ts'
+import { createSessionStore } from './sessions.ts'
 import { createUploadStore } from './uploads.ts'
 
 let config
@@ -22,6 +23,7 @@ const db = openDb(path.join(config.dataDir, 'gateway.db'))
 const app = createApp({
   config,
   repo: createRepo(db),
+  sessions: createSessionStore(db, { idleTimeoutSeconds: config.adminSessionIdleTimeoutSeconds }),
   codex: createCodexClient({ baseUrl: config.codexBaseUrl }),
   uploads: createUploadStore(path.join(config.dataDir, 'uploads')),
 })

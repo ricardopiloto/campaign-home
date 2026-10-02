@@ -17,11 +17,10 @@ import {
   SESSION_COOKIE,
   SESSION_TTL_SECONDS,
   createLoginLimiter,
-  createSessionToken,
   passwordMatches,
-  verifySessionToken,
 } from './auth.ts'
 import type { LoginLimiter } from './auth.ts'
+import type { SessionStore } from './sessions.ts'
 import { CodexUnavailableError } from './codex.ts'
 import type { CodexClient } from './codex.ts'
 import type { Config } from './config.ts'
@@ -38,6 +37,7 @@ export interface AppDeps {
     distDir?: string | null
   }
   repo: CampaignRepo
+  sessions: SessionStore
   codex: CodexClient
   uploads: UploadStore
   foundryStatus?: ReturnType<typeof FoundryStatusClientFactory>
@@ -87,7 +87,7 @@ const fail = (c: Context, status: 400 | 401 | 403 | 404 | 409 | 429 | 502 | 503,
   c.json(body, status)
 
 export function createApp(deps: AppDeps) {
-  const { config, repo, codex, uploads } = deps
+  const { config, repo, codex, uploads, sessions } = deps
   const foundryStatus = deps.foundryStatus ?? createFoundryStatusClient()
   const limiter = deps.limiter ?? createLoginLimiter()
   const app = new Hono()
@@ -141,6 +141,7 @@ export function createApp(deps: AppDeps) {
 
   // CSRF: métodos de escrita só aceitam requisições da mesma origem.
   admin.use('*', async (c, next) => {
+    c.header('Cache-Control', 'no-store')
     if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) {
       const origin = c.req.header('origin')
       if (origin) {
@@ -170,7 +171,8 @@ export function createApp(deps: AppDeps) {
       return fail(c, 401, { error: 'Senha inválida' })
     }
     limiter.reset(ip)
-    setCookie(c, SESSION_COOKIE, createSessionToken(config.sessionSecret), {
+    sessions.revoke(getCookie(c, SESSION_COOKIE))
+    setCookie(c, SESSION_COOKIE, sessions.create(), {
       httpOnly: true,
       sameSite: 'Lax',
       secure: isHttps(c),
@@ -181,13 +183,16 @@ export function createApp(deps: AppDeps) {
   })
 
   admin.post('/logout', (c) => {
+    sessions.revoke(getCookie(c, SESSION_COOKIE))
     deleteCookie(c, SESSION_COOKIE, { path: '/', secure: isHttps(c) })
     return c.body(null, 204)
   })
 
   // Todas as rotas abaixo exigem sessão.
   admin.use('*', async (c, next) => {
-    if (!verifySessionToken(getCookie(c, SESSION_COOKIE), config.sessionSecret)) {
+    const renew = !(c.req.method === 'GET' && c.req.path === '/api/admin/session')
+    if (!sessions.validate(getCookie(c, SESSION_COOKIE), renew)) {
+      deleteCookie(c, SESSION_COOKIE, { path: '/', secure: isHttps(c) })
       return fail(c, 401, { error: 'Sessão inválida ou expirada' })
     }
     c.header('Cache-Control', 'no-store')
@@ -195,6 +200,7 @@ export function createApp(deps: AppDeps) {
   })
 
   admin.get('/session', (c) => c.body(null, 204))
+  admin.post('/session/activity', (c) => c.body(null, 204))
 
   // ---------- Admin: codex ----------
 

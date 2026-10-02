@@ -34,12 +34,23 @@ Acesse http://localhost:5173 (portal) e http://localhost:5173/admin (gestão).
 | Variável         | Obrigatória | Descrição |
 | ---------------- | ----------- | --------- |
 | `ADMIN_PASSWORD` | sim | Senha única da área de gestão. O servidor não sobe sem ela. |
-| `SESSION_SECRET` | sim | Segredo (≥ 32 caracteres) que assina o cookie de sessão. Trocar invalida todas as sessões. |
+| `SESSION_SECRET` | sim | Segredo legado (≥ 32 caracteres), mantido por compatibilidade de configuração. As sessões atuais são persistidas no banco. |
+| `ADMIN_SESSION_IDLE_TIMEOUT_SECONDS` | não | Inteiro positivo em segundos. Padrão: `1800` (30 minutos sem atividade administrativa aceita pelo servidor). |
 | `CODEX_BASE_URL` | não | URL base do campaign-codex (produção: `https://campaign-codex.1nodado.com.br`). Vazio desativa o modo vinculado. |
 | `DATA_DIR`       | não | Onde ficam `gateway.db` e `uploads/`. Padrão: `./data`. |
 | `PORT`           | não | Porta HTTP. Padrão: `3000`. |
 | `TRUSTED_PROXY`  | não | `true` atrás de reverse proxy: usa `X-Forwarded-For`/`-Proto` para o IP (rate limit do login) e para o HTTPS. |
 | `COOKIE_SECURE`  | não | Força (`true`) ou desliga (`false`) o atributo `Secure` do cookie. Vazio: decide pelo protocolo. |
+
+## Sessão administrativa
+
+A sessão expira após 30 minutos sem atividade aceita pelo servidor e, mesmo em uso contínuo, no máximo sete dias após o login. Interações na área admin são agrupadas em notificações a cada 30 segundos; consultas automáticas de validade e visitas ao portal não renovam a sessão. Abas do mesmo navegador compartilham a sessão. Ao voltar a uma aba aberta, a validade é conferida antes de liberar ações; enquanto visível, ela é conferida também a cada 60 segundos.
+
+Ao expirar, a interface retorna ao login com “Sua sessão expirou. Entre novamente.”. Edições não salvas são perdidas e ações interrompidas não são reenviadas após novo login. Erros de conexão oferecem nova tentativa. A aplicação não persiste a senha; o preenchimento automático depende das preferências do navegador.
+
+O cookie contém um identificador aleatório `HttpOnly`, `SameSite=Lax` e `Secure` em HTTPS. Apenas seu hash e os prazos ficam no SQLite. `POST /api/admin/logout` revoga a sessão no servidor; `GET /api/admin/session` verifica sem renovar e `POST /api/admin/session/activity` renova somente uma sessão válida. Rotas protegidas retornam 401 e limpam o cookie quando a sessão vence. Respostas administrativas usam `Cache-Control: no-store`.
+
+Publique backend e frontend juntos. A migração adiciona a tabela `admin_sessions` sem alterar campanhas; cookies antigos exigem novo login. Reiniciar o servidor preserva os prazos. Para revogar todas as sessões atuais, execute `DELETE FROM admin_sessions` no banco do gateway. Em rollback, mantenha a tabela e troque `SESSION_SECRET` para impedir a reativação de cookies antigos; a versão anterior restaura sua política de sete dias.
 
 ## Integração com o campaign-codex
 
