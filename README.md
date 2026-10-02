@@ -33,13 +33,35 @@ Acesse http://localhost:5173 (portal) e http://localhost:5173/admin (gestão).
 
 | Variável         | Obrigatória | Descrição |
 | ---------------- | ----------- | --------- |
-| `ADMIN_PASSWORD` | sim | Senha única da área de gestão. O servidor não sobe sem ela. |
+| `ADMIN_PASSWORD` | sim | Senha única da área de gestão, com ao menos 12 caracteres. O servidor não sobe sem ela. Trocar a senha encerra todas as sessões. |
 | `SESSION_SECRET` | sim | Segredo (≥ 32 caracteres) que assina o cookie de sessão. Trocar invalida todas as sessões. |
 | `CODEX_BASE_URL` | não | URL base do campaign-codex (produção: `https://campaign-codex.1nodado.com.br`). Vazio desativa o modo vinculado. |
 | `DATA_DIR`       | não | Onde ficam `gateway.db` e `uploads/`. Padrão: `./data`. |
 | `PORT`           | não | Porta HTTP. Padrão: `3000`. |
-| `TRUSTED_PROXY`  | não | `true` atrás de reverse proxy: usa `X-Forwarded-For`/`-Proto` para o IP (rate limit do login) e para o HTTPS. |
-| `COOKIE_SECURE`  | não | Força (`true`) ou desliga (`false`) o atributo `Secure` do cookie. Vazio: decide pelo protocolo. |
+| `TRUSTED_PROXY`  | não | `true` atrás de reverse proxy: usa `X-Forwarded-For`/`-Proto` para o IP (rate limits) e para o HTTPS. |
+| `TRUSTED_PROXY_HOPS` | não | Quantos proxies confiáveis existem à frente do app (padrão `1`). O IP do cliente é a entrada de `X-Forwarded-For` contada **do fim**; um valor errado faz todos os usuários compartilharem um IP (ou permite forjá-lo). Caddy sozinho: `1`; Cloudflare + Caddy: `2`. |
+| `PUBLIC_ORIGIN`  | não | Origem pública (ex.: `https://gateway.exemplo.com.br`) usada na checagem CSRF. Vazio: compara `Origin` com o cabeçalho `Host`. |
+| `COOKIE_SECURE`  | não | Força (`true`) ou desliga (`false`) o atributo `Secure` do cookie. Vazio: decide pelo protocolo; com `NODE_ENV=production` (imagem Docker) o padrão é `true`, então o admin exige HTTPS. |
+| `RATE_LIMIT_PUBLIC` / `RATE_LIMIT_ADMIN` | não | Requisições por IP por minuto em `/api/campaigns` e `/uploads/*` (padrão `120`) e em `/api/admin/*` (padrão `60`). Em memória: valem por instância. |
+| `UPLOAD_QUOTA_MB` | não | Cota de disco das imagens enviadas (padrão `200`). Acima dela o upload responde 507. |
+| `NODE_ENV` | não | `production` (já definido na imagem Docker) exige `CODEX_BASE_URL` https e torna o cookie `Secure` por padrão. |
+| `DIST_DIR` | não | Diretório do front buildado. Padrão: `./dist`. |
+| `FOUNDRY_ALLOWED_PORTS` | não | Portas aceitas nas URLs do Foundry (padrão `443`). Se a sua instância usa outra porta HTTPS, liste-a aqui. |
+
+## Segurança
+
+Resumo das defesas (detalhes e como reportar falhas em [`SECURITY.md`](SECURITY.md)):
+
+- **Sessão:** cookie `HttpOnly` + `SameSite=Lax` (`__Host-` e `Secure` sob HTTPS), sessões guardadas no SQLite com validade de 24 h, revogadas no logout e invalidadas ao trocar `ADMIN_PASSWORD` ou `SESSION_SECRET`.
+- **Login:** limite por IP com atraso progressivo e limite global. Atrás de proxy, configure `TRUSTED_PROXY=true` e `TRUSTED_PROXY_HOPS` corretamente.
+- **CSRF:** escritas do admin exigem `Origin` (ou `Sec-Fetch-Site: same-origin`) da origem pública e `Content-Type: application/json` nas rotas JSON. Clientes sem esses cabeçalhos (ex.: `curl` puro) recebem 403: envie `-H 'Sec-Fetch-Site: same-origin'`.
+- **Cabeçalhos:** CSP restritiva, `frame-ancestors 'none'`, `nosniff`, `Referrer-Policy` e HSTS sob HTTPS em todas as respostas.
+- **Uploads:** só JPEG, PNG e WebP (SVG não é mais aceito), reencodados para remover metadados, até 4096 px e 5 MB, com cota de disco e limpeza de envios abandonados há mais de 24 h. SVGs antigos continuam sendo servidos em sandbox.
+- **URLs:** `foundryUrl`, `codexUrl` e imagens externas precisam ser `https:` (sem credenciais). Registros antigos com `http:` ficam guardados, mas o portal não os exibe: edite-os para `https:`. A consulta de status do Foundry só acessa IPs públicos, nas portas permitidas, e nunca segue redirecionamentos.
+- **Capas do codex** são copiadas para `/uploads` ao vincular/ressincronizar, então os visitantes não contatam o codex.
+- **Auditoria:** login, logout e alterações do admin saem no stdout como JSON (`"type":"audit"`), sem senhas nem corpos de requisição.
+
+Recomendações de operação no Docker (além do `USER node` já usado): `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges` (o app só grava em `/data`). Atualize a imagem base periodicamente (`docker pull node:24-slim` e troque o digest no `Dockerfile`).
 
 ## Integração com o campaign-codex
 
@@ -56,7 +78,9 @@ docker build -t foundry-gateway .
 docker run -d --name foundry-gateway -p 3000:3000 \
   -e ADMIN_PASSWORD=... -e SESSION_SECRET=... \
   -e CODEX_BASE_URL=https://campaign-codex.1nodado.com.br \
-  -e TRUSTED_PROXY=true \
+  -e TRUSTED_PROXY=true -e TRUSTED_PROXY_HOPS=1 \
+  -e PUBLIC_ORIGIN=https://gateway.exemplo.com.br \
+  --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
   -v foundry-gateway-data:/data \
   foundry-gateway
 ```

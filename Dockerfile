@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build do front (Vite) ----
-FROM node:24-slim AS build
+# Imagem fixada por digest (atualize junto com o patch de segurança do Node: docker pull node:24-slim).
+FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -9,7 +10,7 @@ COPY . .
 RUN npm run build
 
 # ---- Runtime: Node executa o servidor TypeScript direto (type stripping) ----
-FROM node:24-slim
+FROM node:24-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6
 ENV NODE_ENV=production \
     PORT=3000 \
     DATA_DIR=/data \

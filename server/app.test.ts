@@ -1,11 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { describe, it } from 'node:test'
 import type { AdminCampaign, CodexCampaign, PublicCampaign } from '../shared/types.ts'
-import { CODEX, linked, manual, setup } from './test-helpers.ts'
-
-const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0])
+import { CODEX, fakeCovers, linked, makePng, manual, setup } from './test-helpers.ts'
 
 function upload(file: File) {
   const form = new FormData()
@@ -210,10 +208,10 @@ describe('CRUD de campanhas', () => {
 
 describe('ressincronização', () => {
   it('atualiza nome, sistema, link e imagem do codex; preserva o resto', async () => {
-    const t = setup()
+    const t = setup({ covers: fakeCovers() })
     await t.login()
     const created = (await (
-      await t.req('/api/admin/campaigns', { method: 'POST', json: linked({ tagline: 'Minha tagline', status: '4 PLAYERS' }) })
+      await t.req('/api/admin/campaigns', { method: 'POST', json: linked({ tagline: 'Minha tagline' }) })
     ).json()) as AdminCampaign
     t.fake.body = {
       campanhas: [{ slug: 'wfrp', nome: 'Armada Agazzi', sistema: 'WFRP 4e', capa_url: '/api/c/wfrp/media/covers/b.png' }],
@@ -223,10 +221,12 @@ describe('ressincronização', () => {
     const updated = (await res.json()) as AdminCampaign
     assert.equal(updated.title, 'Armada Agazzi')
     assert.equal(updated.system, 'WFRP 4e')
-    assert.equal(updated.imageUrl, `${CODEX}/api/c/wfrp/media/covers/b.png`)
+    // A capa do codex é copiada para /uploads; a home não referencia o host do codex.
+    assert.match(updated.imageUrl ?? '', /^\/uploads\/[a-f0-9-]{36}\.png$/)
+    assert.equal(updated.imageSource, 'codex')
     assert.equal(updated.tagline, 'Minha tagline')
-    assert.equal(updated.status, '4 PLAYERS')
     assert.equal(updated.foundryUrl, 'https://foundry.test/wfrp')
+    assert.equal(existsSync(path.join(t.uploadsDir, path.basename(created.imageUrl ?? ''))), false)
   })
 
   it('mantém imagem própria (URL) ao ressincronizar', async () => {
@@ -262,7 +262,7 @@ describe('uploads', () => {
     await t.login()
     const res = await t.req('/api/admin/uploads', {
       method: 'POST',
-      body: upload(new File([PNG], 'capa.png', { type: 'image/png' })),
+      body: upload(new File([new Uint8Array(await makePng())], 'capa.png', { type: 'image/png' })),
     })
     assert.equal(res.status, 201)
     const { url } = (await res.json()) as { url: string }
@@ -281,17 +281,14 @@ describe('uploads', () => {
     assert.equal(existsSync(file), false)
   })
 
-  it('serve SVG com CSP sandbox', async () => {
+  it('serve SVG legado com CSP sandbox', async () => {
     const t = setup()
-    await t.login()
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>'
-    const res = await t.req('/api/admin/uploads', {
-      method: 'POST',
-      body: upload(new File([svg], 'a.svg', { type: 'image/svg+xml' })),
-    })
-    const { url } = (await res.json()) as { url: string }
-    const served = await t.app.request(url)
+    const name = '0e0f5b8a-3c1e-4c4e-9d1b-3a4f5e6d7c8b.svg'
+    writeFileSync(path.join(t.uploadsDir, name), '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')
+    const served = await t.app.request(`/uploads/${name}`)
+    assert.equal(served.status, 200)
     assert.match(served.headers.get('content-security-policy') ?? '', /sandbox/)
+    assert.equal(served.headers.get('x-content-type-options'), 'nosniff')
   })
 
   it('recusa tipo não permitido, conteúdo falso e arquivo grande', async () => {
@@ -302,7 +299,7 @@ describe('uploads', () => {
     assert.equal((await post(new File(['MZ'], 'x.exe', { type: 'application/octet-stream' }))).status, 400)
     assert.equal((await post(new File(['not a png'], 'x.png', { type: 'image/png' }))).status, 400)
     const big = new Uint8Array(5 * 1024 * 1024 + 1)
-    big.set(PNG)
+    big.set(await makePng())
     assert.equal((await post(new File([big], 'big.png', { type: 'image/png' }))).status, 400)
     assert.deepEqual(readdirSync(t.uploadsDir), [])
   })

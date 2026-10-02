@@ -4,10 +4,11 @@ import type { ApiError } from './types.ts'
 
 export const UPLOAD_PATH_RE = /^\/uploads\/[a-f0-9-]{36}\.(png|jpg|webp|svg)$/
 
-export function isHttpUrl(value: string): boolean {
+/** Só https e sem credenciais embutidas (http abre espaço a downgrade e rastreamento). */
+export function isHttpsUrl(value: string): boolean {
   try {
     const url = new URL(value)
-    return url.protocol === 'http:' || url.protocol === 'https:'
+    return url.protocol === 'https:' && !url.username && !url.password
   } catch {
     return false
   }
@@ -19,13 +20,13 @@ const trimmedText = (max: number, label: string) =>
     .trim()
     .max(max, `${label} deve ter no máximo ${max} caracteres`)
 
-const optionalHttpUrl = (message: string) =>
+const optionalHttpsUrl = (message: string) =>
   z
     .string()
     .max(2048, 'URL longa demais')
     .nullish()
     .transform((v) => v?.trim() || null)
-    .refine((v) => v === null || isHttpUrl(v), message)
+    .refine((v) => v === null || isHttpsUrl(v), message)
 
 export const campaignInputSchema = z
   .object({
@@ -46,12 +47,12 @@ export const campaignInputSchema = z
       .nullish()
       .transform((v) => v?.trim() || null)
       .refine(
-        (v) => v === null || isHttpUrl(v) || UPLOAD_PATH_RE.test(v),
-        'A imagem deve ser uma URL http(s) válida',
+        (v) => v === null || isHttpsUrl(v) || UPLOAD_PATH_RE.test(v),
+        'A imagem deve ser uma URL https válida',
       ),
     imageSource: z.enum(['codex', 'upload', 'url']).nullish(),
-    foundryUrl: optionalHttpUrl('O link do Foundry deve ser uma URL http(s) válida'),
-    codexUrl: optionalHttpUrl('O link do Codex deve ser uma URL http(s) válida'),
+    foundryUrl: optionalHttpsUrl('O link do Foundry deve ser uma URL https válida'),
+    codexUrl: optionalHttpsUrl('O link do Codex deve ser uma URL https válida'),
   })
   .superRefine((data, ctx) => {
     if (data.source === 'codex' && !data.codexSlug) {
@@ -76,10 +77,10 @@ export const campaignInputSchema = z
     imageSource:
       data.imageUrl === null
         ? null
-        : UPLOAD_PATH_RE.test(data.imageUrl)
-          ? ('upload' as const)
-          : data.imageSource === 'codex' && data.source === 'codex'
-            ? ('codex' as const)
+        : data.imageSource === 'codex' && data.source === 'codex'
+          ? ('codex' as const)
+          : UPLOAD_PATH_RE.test(data.imageUrl)
+            ? ('upload' as const)
             : ('url' as const),
   }))
 

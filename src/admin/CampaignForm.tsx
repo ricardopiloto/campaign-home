@@ -445,7 +445,7 @@ function CampaignForm() {
                 <Field
                   label="Imagem"
                   error={errors.imageUrl}
-                  hint="URL externa ou envio de arquivo (JPEG, PNG, WebP ou SVG, até 5 MB)."
+                  hint="URL externa ou envio de arquivo (JPEG, PNG ou WebP, até 5 MB, até 4096 px)."
                 >
                   {(a) => (
                     <input
@@ -467,7 +467,7 @@ function CampaignForm() {
                     <input
                       className="visually-hidden"
                       type="file"
-                      accept="image/png,image/jpeg,image/webp,image/svg+xml"
+                      accept="image/png,image/jpeg,image/webp"
                       onChange={onUpload}
                       disabled={busy}
                     />

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { UPLOAD_PATH_RE, isHttpsUrl } from '../../shared/schemas.ts'
 import type { PublicCampaign } from '../../shared/types.ts'
 
 interface PanelProps {
@@ -6,7 +7,15 @@ interface PanelProps {
   eager?: boolean
 }
 
-function Panel({ campaign, eager = false }: PanelProps) {
+function Panel({ campaign: raw, eager = false }: PanelProps) {
+  // Defesa em profundidade: a API já filtra, mas o cliente também não renderiza http:.
+  const https = (url: string | null) => (url && isHttpsUrl(url) ? url : null)
+  const campaign = {
+    ...raw,
+    foundryUrl: https(raw.foundryUrl),
+    codexUrl: https(raw.codexUrl),
+    imageUrl: raw.imageUrl && (isHttpsUrl(raw.imageUrl) || UPLOAD_PATH_RE.test(raw.imageUrl)) ? raw.imageUrl : null,
+  }
   const [imageFailed, setImageFailed] = useState(false)
   const titleId = `panel-title-${campaign.id}`
   const meta = [campaign.system && `SYSTEM: ${campaign.system}`, campaign.status]

@@ -158,7 +158,15 @@ export function createRepo(db: DatabaseSync, now: () => Date = () => new Date())
     return new Set(rows.map((r) => r.codex_slug))
   }
 
-  return { list, get, create, update, remove, reorder, linkedSlugs }
+  /** Nomes dos arquivos em /uploads referenciados por alguma campanha. */
+  function referencedUploads(): Set<string> {
+    const rows = db
+      .prepare("SELECT image_url FROM campaigns WHERE image_url LIKE '/uploads/%'")
+      .all() as { image_url: string }[]
+    return new Set(rows.map((r) => r.image_url.slice('/uploads/'.length)))
+  }
+
+  return { list, get, create, update, remove, reorder, linkedSlugs, referencedUploads }
 }
 
 export type CampaignRepo = ReturnType<typeof createRepo>

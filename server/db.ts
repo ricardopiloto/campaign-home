@@ -22,6 +22,11 @@ const MIGRATIONS: string[] = [
     CHECK ((source = 'codex') = (codex_slug IS NOT NULL))
   )`,
   `ALTER TABLE campaigns ADD COLUMN foundry_status_url TEXT`,
+  `CREATE TABLE sessions (
+    id         TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+  )`,
 ]
 
 export function migrate(db: DatabaseSync): void {

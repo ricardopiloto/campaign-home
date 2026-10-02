@@ -1,20 +1,26 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import { campaignInputSchema, toApiError } from '../shared/schemas.ts'
-import { createLoginLimiter, createSessionToken, verifySessionToken } from './auth.ts'
+import {
+  createLoginLimiter,
+  createSessionStore,
+  createSessionToken,
+  deriveSessionKey,
+  parseSessionToken,
+} from './auth.ts'
 import { CodexUnavailableError, createCodexClient, mapCatalog } from './codex.ts'
 import { loadConfig } from './config.ts'
 import { migrate, openDb } from './db.ts'
 import { DuplicateCodexSlugError, createRepo } from './repo.ts'
 
-const validEnv = { ADMIN_PASSWORD: 'x', SESSION_SECRET: 's'.repeat(32) }
+const validEnv = { ADMIN_PASSWORD: 'senha-longa-de-teste', SESSION_SECRET: 's'.repeat(32) }
 
 describe('config', () => {
   it('recusa iniciar sem ADMIN_PASSWORD', () => {
     assert.throws(() => loadConfig({ SESSION_SECRET: 's'.repeat(32) }), /ADMIN_PASSWORD/)
   })
   it('recusa iniciar sem SESSION_SECRET', () => {
-    assert.throws(() => loadConfig({ ADMIN_PASSWORD: 'x' }), /SESSION_SECRET/)
+    assert.throws(() => loadConfig({ ADMIN_PASSWORD: validEnv.ADMIN_PASSWORD }), /SESSION_SECRET/)
   })
   it('normaliza CODEX_BASE_URL e aceita ausência', () => {
     assert.equal(loadConfig(validEnv).codexBaseUrl, null)
@@ -29,9 +35,10 @@ describe('db', () => {
   it('cria o schema e não reaplica migrações', () => {
     const db = openDb(':memory:')
     const version = () => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version
-    assert.equal(version(), 1)
+    const applied = version()
+    assert.ok(applied >= 3)
     migrate(db)
-    assert.equal(version(), 1)
+    assert.equal(version(), applied)
   })
 })
 
@@ -102,18 +109,34 @@ describe('validação', () => {
 })
 
 describe('sessão', () => {
-  const secret = 'k'.repeat(32)
-  it('aceita token válido', () => {
-    assert.equal(verifySessionToken(createSessionToken(secret), secret), true)
+  const key = deriveSessionKey('k'.repeat(32), 'senha-longa-de-teste')
+  it('aceita token com assinatura válida e devolve o id', () => {
+    assert.equal(parseSessionToken(createSessionToken('abc', key), key), 'abc')
   })
-  it('recusa token adulterado, de outro segredo ou expirado', () => {
-    const token = createSessionToken(secret)
-    const [exp, mac] = token.split('.')
-    assert.equal(verifySessionToken(`${Number(exp) + 999}.${mac}`, secret), false)
-    assert.equal(verifySessionToken(token, 'o'.repeat(32)), false)
-    const old = createSessionToken(secret, Date.now() - 8 * 24 * 3600 * 1000)
-    assert.equal(verifySessionToken(old, secret), false)
-    assert.equal(verifySessionToken('lixo', secret), false)
+  it('recusa token adulterado, de outra chave ou malformado', () => {
+    const token = createSessionToken('abc', key)
+    const [, mac] = token.split('.')
+    assert.equal(parseSessionToken(`outro.${mac}`, key), null)
+    assert.equal(parseSessionToken(token, deriveSessionKey('o'.repeat(32), 'senha-longa-de-teste')), null)
+    assert.equal(parseSessionToken('lixo', key), null)
+    assert.equal(parseSessionToken(undefined, key), null)
+  })
+  it('trocar a senha invalida tokens antigos', () => {
+    const token = createSessionToken('abc', key)
+    assert.equal(parseSessionToken(token, deriveSessionKey('k'.repeat(32), 'outra-senha-longa')), null)
+  })
+  it('armazena, expira e revoga sessões', () => {
+    let t = 1_000_000
+    const store = createSessionStore(openDb(':memory:'), () => t)
+    const id = store.create()
+    assert.equal(store.isValid(id), true)
+    store.revoke(id)
+    assert.equal(store.isValid(id), false)
+    const other = store.create()
+    t += 25 * 3600 * 1000
+    assert.equal(store.isValid(other), false)
+    assert.equal(store.isValid('desconhecida'), false)
+    store.purge()
   })
 })
 
@@ -128,6 +151,26 @@ describe('limitador de login', () => {
     assert.equal(limiter.isBlocked('outro'), false)
     t = 1001
     assert.equal(limiter.isBlocked('ip'), false)
+  })
+
+  it('aplica atraso progressivo a partir da 3ª falha', () => {
+    let t = 0
+    const limiter = createLoginLimiter({ maxFailures: 10, baseDelayMs: 1000, now: () => t })
+    limiter.recordFailure('ip')
+    limiter.recordFailure('ip')
+    assert.equal(limiter.retryAfter('ip'), 0)
+    limiter.recordFailure('ip') // 3ª: espera 1 s
+    assert.equal(limiter.retryAfter('ip'), 1)
+    t = 1000
+    assert.equal(limiter.retryAfter('ip'), 0)
+    limiter.recordFailure('ip') // 4ª: espera 2 s
+    assert.equal(limiter.retryAfter('ip'), 2)
+  })
+
+  it('bloqueia todos os IPs ao exceder o limite global', () => {
+    const limiter = createLoginLimiter({ maxFailures: 5, globalMaxFailures: 3, baseDelayMs: 0 })
+    for (const ip of ['a', 'b', 'c']) limiter.recordFailure(ip)
+    assert.equal(limiter.isBlocked('d'), true)
   })
 })
 

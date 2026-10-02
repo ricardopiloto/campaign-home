@@ -1,12 +1,16 @@
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import sharp from 'sharp'
 import { createApp } from './app.ts'
-import { createLoginLimiter } from './auth.ts'
+import { createLoginLimiter, createSessionStore } from './auth.ts'
+import type { AuditEvent, AppDeps } from './app.ts'
 import { createCodexClient } from './codex.ts'
 import { openDb } from './db.ts'
+import type { FoundryStatus } from './foundry.ts'
 import { createRepo } from './repo.ts'
 import { createUploadStore } from './uploads.ts'
+
 
 export const PASSWORD = 'senha-de-teste'
 export const SECRET = 'x'.repeat(32)
@@ -21,7 +25,23 @@ export const CATALOG = {
 
 export type FakeCodex = { body: unknown; status: number; fail: boolean; calls: number }
 
-export function setup({ codexBaseUrl = CODEX as string | null } = {}) {
+const ACTIVE: FoundryStatus = { serverAvailable: true, tableActive: true, world: 'w', system: 'wfrp4e' }
+
+export function setup({
+  codexBaseUrl = CODEX as string | null,
+  config = {} as Partial<AppDeps['config']>,
+  covers,
+  uploadQuotaBytes,
+  limiter = createLoginLimiter({ baseDelayMs: 0 }),
+  extra = {} as Partial<AppDeps>,
+}: {
+  codexBaseUrl?: string | null
+  config?: Partial<AppDeps['config']>
+  covers?: AppDeps['covers']
+  uploadQuotaBytes?: number
+  limiter?: AppDeps['limiter']
+  extra?: Partial<AppDeps>
+} = {}) {
   const fake: FakeCodex = { body: CATALOG, status: 200, fail: false, calls: 0 }
   const fetchImpl = (async () => {
     fake.calls++
@@ -29,30 +49,53 @@ export function setup({ codexBaseUrl = CODEX as string | null } = {}) {
     return new Response(JSON.stringify(fake.body), { status: fake.status })
   }) as typeof fetch
 
+  // Sem DNS nem rede: o status do Foundry é sempre "ativo" (o cliente real tem testes próprios).
+  const foundryStatus = {
+    assertSafeUrl: async () => {},
+    get: async (url: string | null) => (url ? ACTIVE : null),
+  }
+  const audit: AuditEvent[] = []
+
   const uploadsDir = mkdtempSync(path.join(tmpdir(), 'gw-uploads-'))
-  const repo = createRepo(openDb(':memory:'))
+  const db = openDb(':memory:')
+  const repo = createRepo(db)
+  const sessions = createSessionStore(db)
   const app = createApp({
-    config: { adminPassword: PASSWORD, sessionSecret: SECRET, cookieSecure: false, trustedProxy: false },
+    config: { adminPassword: PASSWORD, sessionSecret: SECRET, cookieSecure: false, trustedProxy: false, ...config },
     repo,
     codex: createCodexClient({ baseUrl: codexBaseUrl, fetch: fetchImpl, cacheTtlMs: 0 }),
-    uploads: createUploadStore(uploadsDir),
-    limiter: createLoginLimiter(),
+    uploads: createUploadStore(uploadsDir, { quotaBytes: uploadQuotaBytes }),
+    sessions,
+    foundryStatus,
+    covers,
+    limiter,
+    audit: (event) => audit.push(event),
+    ...extra,
   })
 
   let cookie = ''
-  async function login(password = PASSWORD) {
+  let cookieName = ''
+  async function login(password = PASSWORD, headers: Record<string, string> = {}) {
     const res = await app.request('/api/admin/login', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', ...headers },
       body: JSON.stringify({ password }),
     })
     const setCookie = res.headers.get('set-cookie')
-    if (setCookie) cookie = setCookie.split(';')[0]
+    if (setCookie) {
+      cookie = setCookie.split(';')[0]
+      cookieName = cookie.split('=')[0]
+    }
     return res
   }
 
+  /** Requisição autenticada, same-origin por padrão (passe `sec-fetch-site: ''` para omitir). */
   function req(url: string, init: RequestInit & { json?: unknown } = {}) {
-    const headers = new Headers(init.headers)
+    const headers = new Headers({ 'sec-fetch-site': 'same-origin' })
+    new Headers(init.headers).forEach((value, key) => {
+      if (value === '') headers.delete(key)
+      else headers.set(key, value)
+    })
     if (cookie) headers.set('cookie', cookie)
     let body = init.body
     if (init.json !== undefined) {
@@ -62,8 +105,30 @@ export function setup({ codexBaseUrl = CODEX as string | null } = {}) {
     return app.request(url, { ...init, headers, body })
   }
 
-  return { app, repo, fake, uploadsDir, login, req }
+  return {
+    app,
+    repo,
+    db,
+    sessions,
+    fake,
+    audit,
+    uploadsDir,
+    login,
+    req,
+    get cookie() {
+      return cookie
+    },
+    get cookieName() {
+      return cookieName
+    },
+  }
 }
+
+export const makePng = (width = 8, height = 8) =>
+  sharp({ create: { width, height, channels: 3, background: '#cc3333' } }).png().toBuffer()
+
+export const fakeCovers = (): NonNullable<AppDeps['covers']> => async () =>
+  new File([new Uint8Array(await makePng())], 'cover.png', { type: 'image/png' })
 
 export const manual = (overrides: Record<string, unknown> = {}) => ({
   source: 'manual',
